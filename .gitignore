@@ -1,0 +1,4 @@
+/target
+
+.env
+miniprobe-server/db.sqlite*

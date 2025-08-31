@@ -1,0 +1,11 @@
+[package]
+name = "miniprobe-proto"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+rand = ["dep:rand"]
+
+[dependencies]
+rand = { workspace = true, optional = true }
+serde = { workspace = true }

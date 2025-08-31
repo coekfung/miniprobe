@@ -1,0 +1,37 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+    - repo: https://github.com/pre-commit/pre-commit-hooks
+      rev: v3.2.0
+      hooks:
+          - id: trailing-whitespace
+          - id: end-of-file-fixer
+          - id: check-yaml
+          - id: check-added-large-files
+
+    - repo: https://github.com/DevinR528/cargo-sort
+      rev: v2.0.1
+      hooks:
+          - id: cargo-sort
+            args: ["--workspace", "--grouped"]
+
+    - repo: https://github.com/AndrejOrsula/pre-commit-cargo
+      rev: 0.4.0
+      hooks:
+          - id: cargo-fmt
+            name: Check Rust code style with cargo fmt
+
+    # run `cargo sqlx prepare` to generate the query data
+    # if the `miniprobe-server` crate is changed
+    - repo: local
+      hooks:
+          - id: sqlx-prepare
+            name: Prepare SQLx query data
+            description: "Runs `cargo sqlx prepare` to update the compile-time checked query data."
+            entry: bash -c "cd miniprobe-server && cargo sqlx prepare"
+            language: rust
+            pass_filenames: false
+            # Only run when files in the `miniprobe-server` crate change
+            files: ^miniprobe-server/
+            # This hook modifies `.sqlx/`, which should be part of the commit
+            stages: [pre-commit]

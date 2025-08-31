@@ -1,0 +1,22 @@
+[workspace]
+members = ["miniprobe-client", "miniprobe-proto", "miniprobe-server"]
+resolver = "2"
+
+[workspace.dependencies]
+anyhow = "1.0"
+bytes = "1"
+figment = { version = "0.10", features = ["toml", "env"] }
+postcard = { version = "1.1", features = ["alloc"] }
+rand = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2"
+time = { version = "0.3" }
+tokio = "1"
+
+miniprobe-proto = { path = "miniprobe-proto/" }
+
+[profile.release]
+strip = true      # Automatically strip symbols from the binary.
+opt-level = "s"   # Optimize for size.
+lto = true
+codegen-units = 1

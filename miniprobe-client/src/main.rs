@@ -28,6 +28,12 @@ struct ClientConfig {
     )]
     pub tls: bool,
     #[argh(
+        switch,
+        short = '6',
+        description = "prefer IPv6 when resolving server address"
+    )]
+    pub prefer_ipv6: bool,
+    #[argh(
         option,
         default = "1",
         description = "minimum interval between two connection retries in seconds"
@@ -54,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
     //     Duration::from_secs(cfg.retry_maximum_interval),
     // );
 
-    let auth_resp = auth::auth(&cfg.token, &cfg.server_addr, cfg.tls).await?;
+    let auth_resp = auth::auth(&cfg.token, &cfg.server_addr, cfg.tls, cfg.prefer_ipv6).await?;
 
     println!("{:?}", auth_resp);
 

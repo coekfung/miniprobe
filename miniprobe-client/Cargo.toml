@@ -7,6 +7,7 @@ edition = "2024"
 argh = "0.1"
 http = "1"
 httparse = "1.10"
+itertools = "0.14"
 log = "0.4"
 netdev = "0.36"
 simple_logger = { version = "5", default-features = false, features = [
@@ -22,4 +23,4 @@ miniprobe-proto = { workspace = true }
 postcard = { workspace = true }
 serde = { workspace = true }
 time = { workspace = true }
-tokio = { workspace = true, features = ["rt", "net", "macros"] }
+tokio = { workspace = true, features = ["rt", "net", "time", "macros"] }

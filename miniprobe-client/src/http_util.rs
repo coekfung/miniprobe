@@ -5,13 +5,15 @@ use http::{Method, Request, Response, Uri, header, request, response};
 use itertools::Itertools;
 use log::{debug, trace};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpStream, ToSocketAddrs, lookup_host},
     task::JoinSet,
 };
 use tokio_native_tls::{TlsConnector as TokioTlsConnector, native_tls::TlsConnector};
 
 const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(150);
+
+pub use tokio_tungstenite::MaybeTlsStream;
 
 pub fn basic_request_builder(uri: &str, method: Method) -> anyhow::Result<request::Builder> {
     let uri = uri.parse::<Uri>()?;
@@ -43,29 +45,7 @@ pub async fn send_http_request<T: AsRef<[u8]>>(
     tls: bool,
     prefer_ipv6: bool,
 ) -> anyhow::Result<Response<Bytes>> {
-    let domain = req
-        .uri()
-        .host()
-        .ok_or_else(|| anyhow::anyhow!("URL error: no host name"))?;
-    let domain = if domain.starts_with('[') {
-        // IPv6 address
-        &domain[1..domain.len() - 1]
-    } else {
-        domain
-    };
-    let port = req.uri().port_u16().unwrap_or(if tls { 443 } else { 80 });
-    debug!("connecting to ({domain}, {port})");
-    let stream = connect_happy_eyeballs((domain, port), prefer_ipv6).await?;
-
-    trait AsyncReadWrite: AsyncRead + AsyncWrite + Unpin {}
-    impl<T: AsyncRead + AsyncWrite + Unpin> AsyncReadWrite for T {}
-    let mut stream: Box<dyn AsyncReadWrite> = if tls {
-        let connector = TokioTlsConnector::from(TlsConnector::new()?);
-        let tls_stream = connector.connect(domain, stream).await?;
-        Box::new(tls_stream)
-    } else {
-        Box::new(stream)
-    };
+    let stream = &mut connect_tls(&req, tls, prefer_ipv6).await?;
 
     stream.write_all(&assemble_http_request(req)?).await?;
     stream.flush().await?;
@@ -82,7 +62,31 @@ pub async fn send_http_request<T: AsRef<[u8]>>(
     Ok(resp)
 }
 
-pub async fn connect_happy_eyeballs<A: ToSocketAddrs>(
+pub async fn connect_tls<T>(
+    req: &Request<T>,
+    tls: bool,
+    prefer_ipv6: bool,
+) -> anyhow::Result<MaybeTlsStream<TcpStream>> {
+    let domain = req
+        .uri()
+        .host()
+        .ok_or_else(|| anyhow::anyhow!("URL error: no host name"))?;
+    let port = req.uri().port_u16().unwrap_or(if tls { 443 } else { 80 });
+    debug!("connecting to ({domain}, {port})");
+    let stream = connect_happy_eyeballs((domain, port), prefer_ipv6).await?;
+
+    let stream = if tls {
+        let connector = TokioTlsConnector::from(TlsConnector::new()?);
+        let tls_stream = connector.connect(domain, stream).await?;
+        MaybeTlsStream::NativeTls(tls_stream)
+    } else {
+        MaybeTlsStream::Plain(stream)
+    };
+
+    Ok(stream)
+}
+
+async fn connect_happy_eyeballs<A: ToSocketAddrs>(
     addr: A,
     prefer_ipv6: bool,
 ) -> anyhow::Result<TcpStream> {

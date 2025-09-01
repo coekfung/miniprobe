@@ -73,9 +73,10 @@ pub async fn send_http_request<T: AsRef<[u8]>>(
     let resp = {
         let mut buffer = BytesMut::with_capacity(128);
         while stream.read_buf(&mut buffer).await? != 0 {}
-        trace!("Response: {:?}", String::from_utf8_lossy(&buffer));
 
-        parse_http_response(&buffer)?
+        let buffer = buffer.freeze();
+        trace!("Response: {:?}", String::from_utf8_lossy(&buffer));
+        parse_http_response(buffer)?
     };
 
     Ok(resp)
@@ -175,12 +176,12 @@ fn assemble_http_request<T: AsRef<[u8]>>(req: Request<T>) -> anyhow::Result<Byte
     Ok(buffer.freeze())
 }
 
-fn parse_http_response(bytes: &[u8]) -> anyhow::Result<http::Response<Bytes>> {
+fn parse_http_response(bytes: Bytes) -> anyhow::Result<http::Response<Bytes>> {
     const MAX_HEADERS: usize = 64;
     let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut resp = httparse::Response::new(&mut headers);
 
-    let status = resp.parse(bytes)?;
+    let status = resp.parse(&bytes)?;
 
     if status.is_partial() {
         anyhow::bail!("HTTP error: response is incomplete");
@@ -202,7 +203,7 @@ fn parse_http_response(bytes: &[u8]) -> anyhow::Result<http::Response<Bytes>> {
     //     response_builder = response_builder.header(header.name, header.value);
     // }
 
-    let body = Bytes::copy_from_slice(&bytes[body_start_index..]);
+    let body = bytes.slice(body_start_index..);
 
     Ok(response_builder.body(body)?)
 }

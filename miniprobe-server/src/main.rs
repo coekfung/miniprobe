@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 use std::{
     net::{IpAddr, SocketAddr},
     str::FromStr,
@@ -17,16 +15,17 @@ use confique::Config;
 use sha2::{Digest, Sha256};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use tokio::{net::TcpListener, signal, sync::RwLock};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tower_http::{timeout::TimeoutLayer, trace::TraceLayer};
-use tracing::{debug, info, trace};
+use tracing::{info, trace};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::session::SessionManager;
+use crate::route::SessionManager;
 
 mod admin;
+mod lock;
 mod postcard;
 mod route;
-mod session;
 
 const CLINET_TOKEN_LENGTH: usize = 16;
 
@@ -76,17 +75,27 @@ fn config(path: &str) -> anyhow::Result<Conf> {
 pub(crate) struct AppState {
     pub session_mgr: Arc<RwLock<SessionManager>>,
     pub pool: SqlitePool,
+    pub ws_graceful_shutdown: WebsocketGracefule,
 }
 
-fn app(pool: SqlitePool) -> Router {
-    let state = AppState {
-        session_mgr: Arc::new(RwLock::new(SessionManager::new())),
-        pool,
-    };
+#[derive(Clone, Debug)]
+struct WebsocketGracefule {
+    pub token: CancellationToken,
+    pub tracker: TaskTracker,
+}
 
+fn app(state: AppState) -> Router {
     Router::new()
         .route("/health", get(route::health))
-        .route("/auth", post(route::auth))
+        // .route("/auth", post(route::auth))
+        .nest(
+            "/api/v1",
+            Router::new().route("/sessions", post(route::create_session)),
+        )
+        .nest(
+            "/ws/v1",
+            Router::new().route("/metrics/ingress", get(route::metric_ingress_ws)),
+        )
         .layer((
             TraceLayer::new_for_http(),
             // Prevent requests to hang forever
@@ -100,10 +109,10 @@ async fn main() -> anyhow::Result<()> {
     init_tracing();
 
     let cli = Cli::parse();
-    debug!("using command line arguments {:?}", cli);
+    trace!("using command line arguments {:?}", cli);
 
     let config = config(&cli.config_path.unwrap_or("config.toml".to_owned()))?;
-    debug!("using config {:?}", config);
+    trace!("using config {:?}", config);
 
     let db_opts = SqliteConnectOptions::from_str(&config.database_url)?.create_if_missing(true);
     let pool = SqlitePool::connect_with(db_opts).await?;
@@ -118,17 +127,30 @@ async fn main() -> anyhow::Result<()> {
             info!("listening on {addr}");
             let listener = TcpListener::bind(addr).await?;
 
-            axum::serve(listener, app(pool.clone()))
-                .with_graceful_shutdown(shutdown_signal())
+            let state = AppState {
+                session_mgr: Arc::new(RwLock::new(SessionManager::new())),
+                pool: pool.clone(),
+                ws_graceful_shutdown: WebsocketGracefule {
+                    token: CancellationToken::new(),
+                    tracker: TaskTracker::new(),
+                },
+            };
+
+            axum::serve(listener, app(state.clone()))
+                .with_graceful_shutdown(shutdown_signal(state.ws_graceful_shutdown.token.clone()))
                 .await?;
+
+            let ws_tracker = state.ws_graceful_shutdown.tracker.clone();
+            ws_tracker.close();
+
+            trace!("waiting {} websocket connection shutdown", ws_tracker.len());
+            ws_tracker.wait().await;
         }
         Commands::Admin(command) => admin::admin(command, pool.clone()).await?,
     }
 
     trace!("closing database connection");
     pool.close().await;
-
-    debug!("shutdown normally");
 
     Ok(())
 }
@@ -158,7 +180,9 @@ fn init_tracing() {
         .init();
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(ws_token: CancellationToken) {
+    let _ws_shutdown_guard = ws_token.drop_guard();
+
     let ctrl_c = async {
         signal::ctrl_c()
             .await

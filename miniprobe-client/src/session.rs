@@ -1,22 +1,26 @@
+use bytes::BytesMut;
 use http::{Method, header};
-use miniprobe_proto::msg::{AuthReqMessage, AuthRespMessage};
+use miniprobe_proto::msg::{CreateSessionReq, CreateSessionResp};
 
-use crate::{http_util, query::StatusQuerent};
-pub async fn auth(
+use crate::{http_util, query::MetricsQuerent};
+pub async fn create_session(
     token: &str,
     server_addr: &str,
     tls: bool,
     prefer_ipv6: bool,
-) -> anyhow::Result<AuthRespMessage> {
+) -> anyhow::Result<CreateSessionResp> {
     let uri = format!(
-        "{}://{}/auth",
-        if tls { "https" } else { "http" },
-        server_addr
+        "{}://{server_addr}/api/v1/sessions",
+        if tls { "https" } else { "http" }
     );
-    let body = postcard::to_allocvec(&AuthReqMessage {
-        token: token.to_owned(),
-        system_info: StatusQuerent::query_static(),
-    })?;
+    let body = postcard::to_extend(
+        &CreateSessionReq {
+            token: token.to_owned(),
+            system_info: MetricsQuerent::query_static(),
+        },
+        BytesMut::new(),
+    )?
+    .freeze();
     let req = http_util::basic_request_builder(&uri, Method::POST)?
         .header(header::CONTENT_TYPE, "application/postcard")
         .header(header::CONTENT_LENGTH, body.len())
@@ -32,8 +36,7 @@ pub async fn auth(
         );
     }
 
-    let auth_resp: AuthRespMessage = postcard::from_bytes(resp.body())?;
-    log::info!("authentication successful");
+    let auth_resp: CreateSessionResp = postcard::from_bytes(resp.body())?;
 
     Ok(auth_resp)
 }

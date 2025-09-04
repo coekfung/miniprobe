@@ -3,11 +3,14 @@
 use std::time::Duration;
 
 use argh::FromArgs;
+use miniprobe_proto::msg::CreateSessionResp;
 use simple_logger::SimpleLogger;
+use tokio::time::sleep;
 
-mod auth;
+mod egress;
 mod http_util;
 mod query;
+mod session;
 
 #[derive(FromArgs, Debug)]
 #[argh(description = "A lightweight system status probe client.")]
@@ -54,54 +57,46 @@ async fn main() -> anyhow::Result<()> {
     let cfg: ClientConfig = argh::from_env();
     log::debug!("Client config: {cfg:#?}");
 
-    // let mut querent = query::StatusQuerent::try_new(None)?;
-    // let mut reconnect_timer = ReconnectTimer::new(
-    //     Duration::from_secs(cfg.retry_minimum_interval),
-    //     Duration::from_secs(cfg.retry_maximum_interval),
-    // );
+    let mut querent = query::MetricsQuerent::try_new(None)?;
+    let mut reconnect_timer = ReconnectTimer::new(
+        Duration::from_secs(cfg.retry_minimum_interval),
+        Duration::from_secs(cfg.retry_maximum_interval),
+    );
 
-    let auth_resp = auth::auth(&cfg.token, &cfg.server_addr, cfg.tls, cfg.prefer_ipv6).await?;
+    loop {
+        let res: anyhow::Result<()> = async {
+            let CreateSessionResp {
+                session_token,
+                scrape_interval,
+            } = session::create_session(&cfg.token, &cfg.server_addr, cfg.tls, cfg.prefer_ipv6)
+                .await?;
+            reconnect_timer.reset();
 
-    println!("{:?}", auth_resp);
+            egress::metrics_egress(
+                &mut querent,
+                Duration::from_secs(scrape_interval),
+                &session_token,
+                &cfg.server_addr,
+                cfg.tls,
+                cfg.prefer_ipv6,
+            )
+            .await?;
+            Ok(())
+        }
+        .await;
 
-    Ok(())
+        if let Err(e) = res {
+            log::warn!("Error occurred: {e}");
+            log::info!(
+                "Reconnecting in {} seconds...",
+                reconnect_timer.interval().as_secs()
+            );
+            reconnect_timer.wait().await;
+        } else {
+            return Ok(()); // means graceful shutdown
+        }
+    }
 }
-
-// fn connect_to_server(server_addr: &str) -> anyhow::Result<WebSocket<MaybeTlsStream<TcpStream>>> {
-//     let request = Request::builder().uri(server_addr).body(())?;
-//     let (socket, response) = connect(request)?;
-
-//     log::info!("Connection to {} established.", server_addr);
-
-//     log::debug!("With response headers:");
-//     for (header, _value) in response.headers() {
-//         log::debug!("* {header}");
-//     }
-
-//     Ok(socket)
-// }
-
-// fn report_status(
-//     querent: &mut StatusQuerent,
-//     socket: &mut WebSocket<MaybeTlsStream<TcpStream>>,
-//     scrape_interval: Duration,
-// ) -> anyhow::Result<()> {
-//     // Initial static report
-//     socket.send(Message::binary(to_allocvec(&msg::Message::ReportStatic(
-//         StatusQuerent::query_static(),
-//     ))?))?;
-//     log::debug!("Sent static status to server.");
-
-//     loop {
-//         // Interval dynamic report
-//         socket.send(Message::binary(to_allocvec(&msg::Message::ReportDynamic(
-//             querent.query_dynamic(),
-//         ))?))?;
-//         log::debug!("Sent dynamic status to server.");
-
-//         thread::sleep(scrape_interval);
-//     }
-// }
 
 struct ReconnectTimer {
     minimal_interval: Duration,
@@ -120,8 +115,8 @@ impl ReconnectTimer {
         }
     }
 
-    fn wait(&mut self) {
-        std::thread::sleep(self.curr_interval);
+    async fn wait(&mut self) {
+        sleep(self.curr_interval).await;
         self.curr_interval = (self.curr_interval * 2).min(self.maximal_interval);
     }
 

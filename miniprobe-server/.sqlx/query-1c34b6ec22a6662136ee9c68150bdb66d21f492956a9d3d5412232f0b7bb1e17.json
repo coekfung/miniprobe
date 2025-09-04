@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                INSERT INTO session_data_cpu (session_data_id, cpu_id, cpu_usage)\n                VALUES (?, ?, ?)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "1c34b6ec22a6662136ee9c68150bdb66d21f492956a9d3d5412232f0b7bb1e17"
+}

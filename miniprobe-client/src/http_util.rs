@@ -1,19 +1,68 @@
-use std::time::Duration;
+use std::{pin::Pin, time::Duration};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use http::{Method, Request, Response, Uri, header, request, response};
 use itertools::Itertools;
 use log::{debug, trace};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpStream, ToSocketAddrs, lookup_host},
     task::JoinSet,
 };
-use tokio_native_tls::{TlsConnector as TokioTlsConnector, native_tls::TlsConnector};
+use tokio_native_tls::{TlsConnector as TokioTlsConnector, TlsStream, native_tls::TlsConnector};
 
 const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(150);
 
-pub use tokio_tungstenite::MaybeTlsStream;
+pub enum MaybeTlsStream<S> {
+    Plain(S),
+    Tls(TlsStream<S>),
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for MaybeTlsStream<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for MaybeTlsStream<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_flush(cx),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
 
 pub fn basic_request_builder(uri: &str, method: Method) -> anyhow::Result<request::Builder> {
     let uri = uri.parse::<Uri>()?;
@@ -72,13 +121,13 @@ pub async fn connect_tls<T>(
         .host()
         .ok_or_else(|| anyhow::anyhow!("URL error: no host name"))?;
     let port = req.uri().port_u16().unwrap_or(if tls { 443 } else { 80 });
-    debug!("connecting to ({domain}, {port})");
+    trace!("connecting to ({domain}, {port})");
     let stream = connect_happy_eyeballs((domain, port), prefer_ipv6).await?;
 
     let stream = if tls {
         let connector = TokioTlsConnector::from(TlsConnector::new()?);
         let tls_stream = connector.connect(domain, stream).await?;
-        MaybeTlsStream::NativeTls(tls_stream)
+        MaybeTlsStream::Tls(tls_stream)
     } else {
         MaybeTlsStream::Plain(stream)
     };
@@ -113,11 +162,11 @@ async fn connect_happy_eyeballs<A: ToSocketAddrs>(
             Some(stream)
         }
         Ok(Err(e)) => {
-            debug!("connection attempt failed: {e}");
+            trace!("connection attempt failed: {e}");
             None
         }
         Err(e) => {
-            debug!("connection attempt panicked: {e}");
+            trace!("connection attempt panicked: {e}");
             None
         }
     };
@@ -193,7 +242,7 @@ fn parse_http_response(bytes: Bytes) -> anyhow::Result<http::Response<Bytes>> {
 
     let body_start_index = status.unwrap();
 
-    let response_builder = response::Builder::new()
+    let mut response_builder = response::Builder::new()
         .status(resp.code.unwrap_or(200))
         .version(match resp.version.unwrap_or(1) {
             0 => http::Version::HTTP_10,
@@ -202,10 +251,9 @@ fn parse_http_response(bytes: Bytes) -> anyhow::Result<http::Response<Bytes>> {
             _ => http::Version::HTTP_11,
         });
 
-    // NOTE: headers are not used currently
-    // for header in resp.headers {
-    //     response_builder = response_builder.header(header.name, header.value);
-    // }
+    for header in resp.headers {
+        response_builder = response_builder.header(header.name, header.value);
+    }
 
     let body = bytes.slice(body_start_index..);
 

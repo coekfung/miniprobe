@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                INSERT INTO session_data_memory (session_data_id, total, used, swap_total, swap_used)\n                VALUES (?, ?, ?, ?, ?)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "afecc46d80d749c5c171055b2d61b202e668d9366632982d0578144ff6669617"
+}

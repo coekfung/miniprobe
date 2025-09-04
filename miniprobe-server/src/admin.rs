@@ -92,7 +92,7 @@ async fn add_client(pool: &Pool<Sqlite>, username: String) -> anyhow::Result<()>
         token_idx,
         token_hash
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     tx.commit().await?;

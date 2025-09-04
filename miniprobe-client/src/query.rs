@@ -1,14 +1,16 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use miniprobe_proto::{
-    CpuStatus, DynamicStatus, MemoryStatus, NetworkStatus, StaticStatus, SystemStatus,
+    CpuMetrics, DynamicMetrics, MemoryMetrics, NetworkMetrics, StaticMetrics, SystemInfo,
 };
 
 #[derive(Debug)]
-pub struct StatusQuerent {
+pub struct MetricsQuerent {
     system: sysinfo::System,
     net_interface: netdev::Interface,
 }
 
-impl StatusQuerent {
+impl MetricsQuerent {
     pub fn try_new(if_name: Option<&str>) -> anyhow::Result<Self> {
         let system = sysinfo::System::new_all();
         let net_interface = match if_name {
@@ -28,15 +30,15 @@ impl StatusQuerent {
         })
     }
 
-    fn query_cpus(&mut self) -> Vec<CpuStatus> {
+    fn query_cpus(&mut self) -> Vec<CpuMetrics> {
         self.system.refresh_cpu_all();
         let usages = self.system.cpus().iter().map(|cpu| cpu.cpu_usage());
-        usages.map(|usage| CpuStatus { usage }).collect()
+        usages.map(|usage| CpuMetrics { usage }).collect()
     }
 
-    fn query_memory(&mut self) -> MemoryStatus {
+    fn query_memory(&mut self) -> MemoryMetrics {
         self.system.refresh_memory();
-        MemoryStatus {
+        MemoryMetrics {
             total: self.system.total_memory(),
             used: self.system.used_memory(),
             swap_total: self.system.total_swap(),
@@ -44,9 +46,9 @@ impl StatusQuerent {
         }
     }
 
-    fn query_network_status(&mut self) -> NetworkStatus {
+    fn query_network_status(&mut self) -> NetworkMetrics {
         let _ = self.net_interface.update_stats();
-        NetworkStatus {
+        NetworkMetrics {
             ifname: self.net_interface.name.clone(),
             rx_bytes: self
                 .net_interface
@@ -61,23 +63,27 @@ impl StatusQuerent {
         }
     }
 
-    pub fn query_dynamic(&mut self) -> DynamicStatus {
-        DynamicStatus {
+    pub fn query_dynamic(&mut self) -> DynamicMetrics {
+        DynamicMetrics {
+            sample_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             cpu: self.query_cpus(),
             memory: self.query_memory(),
             network: self.query_network_status(),
         }
     }
 
-    pub fn query_static() -> StaticStatus {
-        let system_status = SystemStatus {
+    pub fn query_static() -> StaticMetrics {
+        let system_status = SystemInfo {
             system_name: sysinfo::System::name(),
             kernel_version: sysinfo::System::kernel_version(),
             os_version: sysinfo::System::os_version(),
             host_name: sysinfo::System::host_name(),
             cpu_arch: sysinfo::System::cpu_arch(),
         };
-        StaticStatus {
+        StaticMetrics {
             system: system_status,
         }
     }
@@ -89,7 +95,7 @@ mod test {
 
     #[test]
     fn test_query_cpus() {
-        let mut querent = StatusQuerent::try_new(None).expect("Failed to create querent");
+        let mut querent = MetricsQuerent::try_new(None).expect("Failed to create querent");
         let _ = querent.query_cpus();
         std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
         let cpu_status = querent.query_cpus();
@@ -99,7 +105,7 @@ mod test {
 
     #[test]
     fn test_query_memory() {
-        let mut querent = StatusQuerent::try_new(None).expect("Failed to create querent");
+        let mut querent = MetricsQuerent::try_new(None).expect("Failed to create querent");
         let memory_status = querent.query_memory();
 
         println!("{:?}", memory_status);
@@ -107,7 +113,7 @@ mod test {
 
     #[test]
     fn test_query_network_status() {
-        let mut querent = StatusQuerent::try_new(None).expect("Failed to create querent");
+        let mut querent = MetricsQuerent::try_new(None).expect("Failed to create querent");
         let network_status = querent.query_network_status();
 
         println!("{:?}", network_status);
@@ -115,7 +121,7 @@ mod test {
 
     #[test]
     fn test_query_static() {
-        let static_status = StatusQuerent::query_static();
+        let static_status = MetricsQuerent::query_static();
 
         println!("{:?}", static_status);
     }

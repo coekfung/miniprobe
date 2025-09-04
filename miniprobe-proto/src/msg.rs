@@ -1,21 +1,17 @@
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
-use crate::{DynamicStatus, StaticStatus};
+use crate::StaticMetrics;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Message {
-    ReportStatic(StaticStatus),
-    ReportDynamic(DynamicStatus),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthReqMessage {
+pub struct CreateSessionReq {
     pub token: String,
-    pub system_info: StaticStatus,
+    pub system_info: StaticMetrics,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthRespMessage {
+pub struct CreateSessionResp {
     pub session_token: SessionToken,
     pub scrape_interval: u64,
 }
@@ -32,6 +28,22 @@ impl std::fmt::Debug for SessionToken {
 impl std::fmt::Display for SessionToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", String::from_utf8_lossy(&self.0))
+    }
+}
+
+impl FromStr for SessionToken {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bytes = s.as_bytes();
+        if bytes.len() != 32 {
+            return Err("SessionToken must be 32 bytes long");
+        }
+
+        let mut token_bytes = [0; 32];
+        token_bytes.copy_from_slice(&bytes[0..32]);
+
+        Ok(SessionToken(token_bytes))
     }
 }
 

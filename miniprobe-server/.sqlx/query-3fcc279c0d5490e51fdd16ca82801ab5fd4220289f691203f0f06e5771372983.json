@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                INSERT INTO session_data_network (session_data_id, ifname, rx_bytes, tx_bytes)\n                VALUES (?, ?, ?, ?)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "3fcc279c0d5490e51fdd16ca82801ab5fd4220289f691203f0f06e5771372983"
+}
